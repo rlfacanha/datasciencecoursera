@@ -1,0 +1,176 @@
+---
+title: "Pratical Machine Learning - Prediction Assignment Writeup"
+author: "rlfacanha"
+date: "08/09/2020"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Overview
+
+People regularly quantify how much of a particular activity they do, but they rarely quantify how well they do it. 
+
+The goal of this project is to predict the manner in which a group of people exercise. 
+
+The data will come from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. The individuals performed barbell lifts correctly and incorrectly in 5 different ways: exactly according to the specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E).
+
+Class A corresponds to the specified execution of the exercise, while the other 4 classes correspond to common mistakes. 
+
+Read more: http:/groupware.les.inf.puc-rio.br/har#ixzz4TjqNZMWx
+
+More information is available from the website here: http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har (section Weight Lifting Exercise Dataset)
+
+### Loading Data
+
+The training data for this project are available at:
+
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+
+The test data are available at:
+
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+```{r lpackages}
+library(caret)
+library(e1071)
+library(data.table)
+library(dplyr)
+library(ggplot2)
+library(rattle)
+library(gbm)
+```
+```{r loadata}
+pml_training_url <-"https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+pml_testing_url <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+pml_training <- read.table("pml-training.csv", sep =",", header = TRUE )
+pml_testing <- read.table("pml-testing.csv", sep =",", header = TRUE )
+dim(pml_training)
+dim(pml_testing)
+#check variable "classe"
+table(pml_training$classe)
+```
+
+Before modeling, predictor data will be pre-processed.
+
+```{r basicprocessing}
+#Remove near zero covariates
+nsv <- nearZeroVar(pml_training,saveMetrics=TRUE)
+training <- pml_training[,!nsv$nzv]
+testing <- pml_testing[,!nsv$nzv]
+#Removing variables with missing values
+training <- training[,(colSums(is.na(training)) == 0)]
+testing <- testing[,(colSums(is.na(testing)) == 0)]
+#Removing unnused columns
+training <- training[,-c(1:6)]
+testing <- testing[,-c(1:6)]
+# factorize variables 
+fcts <- c("classe")
+training[fcts] <- lapply(training[fcts], factor)
+```
+
+### Testing Different Approaches for Prediction Models 
+
+In order to build a prediction model, the variable "classe" in the training set will be used and data will be splited into training and testing datasets at each new approach.
+
+First approach will use prediction with trees.
+
+```{r partition}
+#Partition the training data into a training set and a #testing/validation set
+inTrain <- createDataPartition(y=training$classe, p=0.7, list=FALSE)
+training_partition <- training[inTrain,]
+testing_partition <- training[-inTrain,]
+dim(training_partition)
+dim(testing_partition)
+```
+
+```{r withtrees, fig.height=6, fig.width=6}
+set.seed(125)
+#Training resampling with method repeated cross validation
+controlTree <- trainControl(method="cv", number=5)
+modTree <- train(classe ~., method="rpart", data=training_partition, trControl=controlTree)
+print(modTree$finalModel)
+fancyRpartPlot(modTree$finalModel)
+#Predicting new values
+predmodTree <- predict(modTree,newdata=testing_partition)
+##Accuracy
+confMatTree <- confusionMatrix(predict(modTree,newdata=testing_partition), testing_partition$classe)
+confMatTree 
+```
+Prediction with trees has low accuracy; so out of sample error is too high.
+
+Second approach will use random forest. Cross validation in training set is done with cross validation method. 
+
+```{r partitiontorf}
+#Partition the training data into a training set and a #testing/validation set
+inTrain <- createDataPartition(y=training$classe, p=0.7, list=FALSE)
+training_partition <- training[inTrain,]
+testing_partition <- training[-inTrain,]
+dim(training_partition)
+dim(testing_partition)
+```
+
+```{r randomforest, fig.height=6, fig.width=6}
+set.seed(123)
+#Training resampling with method repeated cross validation
+controlRF <- trainControl(method="cv", number=3)
+modClasseRF <- train(classe ~., method="rf",data=training_partition, trControl=controlRF)
+print(modClasseRF$finalModel)
+#Predicting new values
+predmodRF <- predict(modClasseRF,newdata=testing_partition)
+#Accuracy
+confMatRF <- confusionMatrix(predict(modClasseRF, testing_partition), testing_partition$classe)
+confMatRF 
+```
+Random forest has very high accuracy; so out of sample error is very low.
+
+Third approach will use boosting with trees. Cross validation in training set is done with repeated cross validation method. 
+
+```{r partboosting}
+#Partition the training data into a training set and a #testing/validation set
+inTrain <- createDataPartition(y=training$classe, p=0.7, list=FALSE)
+training_partition <- training[inTrain,]
+testing_partition <- training[-inTrain,]
+dim(training_partition)
+dim(testing_partition)
+```
+
+```{r boosting, cache=TRUE}
+set.seed(999)
+#Training resampling with method repeated cross validation
+controlBoost <- trainControl(method="repeatedcv", number=3, repeats = 1)
+#Fit the model
+modClasseBoost <- train(classe ~., method="gbm", data=training_partition, trControl=controlBoost, verbose=FALSE)
+print(modClasseBoost)
+#Predicting new values
+predmodBoost <- predict(modClasseBoost, testing_partition)
+#Ploting results
+qplot(predict(modClasseBoost, testing_partition), classe, data = testing_partition)
+#Accuracy
+confMatBoosting <- confusionMatrix(predict(modClasseBoost, testing_partition), testing_partition$classe)
+confMatBoosting 
+```
+
+Boosting with trees also has very high accuracy; so out of sample error is low.
+
+### Conclusion - Model Selection
+
+The aproaches show that random forest and boosting trees are more accurate than prediction with trees. 
+
+Since random forest has a slightly better accuracy, this model will be chosen to be applied to testing dataset.
+
+### Applying Random Forest to Testing Dataset 
+
+Since random forest is more accurate, it will be applied to predict the 20 different test cases using testing dataset.
+
+
+```{r predict}
+predict_testing <- predict(modClasseRF, newdata=testing)
+predict_testing
+```
+
+
